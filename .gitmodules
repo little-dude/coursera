@@ -1,0 +1,3 @@
+[submodule "cryptocurrencies/cryptocurrency-course-materials"]
+	path = cryptocurrencies/cryptocurrency-course-materials
+	url = https://github.com/keskival/cryptocurrency-course-materials
