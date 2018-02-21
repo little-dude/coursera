@@ -1,0 +1,288 @@
+use super::token::Token;
+use std::string::String;
+
+newline = "\n"
+
+// ===========================================================================
+// comments
+// ===========================================================================
+
+// match parenthesized comments, eg:
+//
+//      (* comment *)
+//
+//      (*
+//           comment
+//      *)
+//
+//      (* nested (* comment *) *)
+//
+paren_comment_content = paren_comment / (!"(*" !"*)" .)
+paren_comment -> Option<Token>
+    = "(*" paren_comment_content* end:$("*)" / !.)
+    {
+        if end == "*)" {
+            None
+        } else {
+            Some(Token::Err("EOF in comment".into()))
+        }
+    }
+
+
+// match comments starting with "--", eg:
+//
+//      -- this is a comment, that end at the end of the line
+//
+line_comment -> Option<Token>
+    = "--" (!newline .)*
+    { None }
+
+// match any type of comment
+pub comment -> Option<Token> = line_comment / paren_comment
+
+// ===========================================================================
+// keywords
+// ===========================================================================
+alphanum = [a-zA-Z0-9]
+LET      -> Token = "let"i      !alphanum { Token::Let      }
+CLASS    -> Token = "class"i    !alphanum { Token::Class    }
+IF       -> Token = "if"i       !alphanum { Token::If       }
+FI       -> Token = "fi"i       !alphanum { Token::Fi       }
+ELSE     -> Token = "else"i     !alphanum { Token::Else     }
+THEN     -> Token = "then"i     !alphanum { Token::Then     }
+LOOP     -> Token = "loop"i     !alphanum { Token::Loop     }
+POOL     -> Token = "pool"i     !alphanum { Token::Pool     }
+CASE     -> Token = "case"i     !alphanum { Token::Case     }
+ESAC     -> Token = "esac"i     !alphanum { Token::Esac     }
+NEW      -> Token = "new"i      !alphanum { Token::New      }
+OF       -> Token = "of"i       !alphanum { Token::Of       }
+NOT      -> Token = "not"i      !alphanum { Token::Not      }
+ISVOID   -> Token = "isvoid"i   !alphanum { Token::IsVoid   }
+INHERITS -> Token = "inherits"i !alphanum { Token::Inherits }
+
+pub keyword -> Token
+    = LET / CLASS / IF / FI / ELSE / THEN / LOOP / POOL / CASE / ESAC / NEW / OF / NOT / ISVOID / INHERITS
+
+// ===========================================================================
+// booleans
+// ===========================================================================
+bool_true  -> Token = "t" "rue"i  { Token::Bool(true)  }
+bool_false -> Token = "f" "alse"i { Token::Bool(false) }
+pub boolean -> Token = bool_true / bool_false
+
+
+// ===========================================================================
+// strings
+// ===========================================================================
+
+// replace
+// "foo\
+//      bar"
+// by "foobar"
+// FIXME: we actually convert this to "foo bar"...
+linebreak -> char
+    = "\\\n" [ \t]*
+    { ' ' }
+
+// replace "\b" by an actual backspace
+escaped_backspace -> char
+    = "\\b"
+    { '\u{8}' }
+
+// replace "\n" by an actual newline
+escaped_newline -> char
+    = "\\n"
+    { '\n' }
+
+// replace "\f" by an actual formfeed
+escaped_form_feed -> char
+    = "\\f"
+    { '\u{12}' }
+
+// replace "\t" by an actual horizontal tab
+escaped_tab -> char
+    = "\\t"
+    { '\t' }
+
+// un-escape any character
+escaped_char -> char
+    = "\\" s:$(.)
+    { s.chars().next().unwrap() }
+
+// match any character except non-escaped newline and non-escaped double-quote
+non_escaped_char -> char
+    = !newline !"\"" s:$(.)
+    { s.chars().next().unwrap() }
+
+string_content -> char
+    = linebreak
+      / escaped_backspace
+      / escaped_tab
+      / escaped_newline
+      / escaped_form_feed
+      / escaped_char
+      / non_escaped_char
+
+pub string -> Token
+    = "\"" s:string_content* end:$("\"" / "\n" / !.)
+    {
+        match end {
+            "" => {
+                // If an EOF is encountered before the close-quote, report this
+                // error as "EOF in string constant".
+                Token::Err("EOF in string constant".into())
+            }
+            "\n" => {
+                Token::Err("Unterminated string constant".into())
+            }
+            "\"" => {
+                let string: String = s.into_iter().collect();
+                // We are supposed to reject string longer than 1024 characters.
+                if string.len() > 1024 {
+                    Token::Err("String constant too long".into())
+                } else {
+                    // it is explicitely asked to reject strings that contains the
+                    // \0 character so we do that here
+                    if string.find('\u{0}').is_some() {
+                        Token::Err("String contains null character".into())
+                    } else {
+                        Token::String(string)
+                    }
+                }
+            }
+            _ => { panic!("unhandled string termination: \"{}\"", end) }
+        }
+    }
+
+
+// ===========================================================================
+// integers
+// ===========================================================================
+pub integer -> Token
+    = i:$([0-9]+)
+    { Token::Int(i.parse().unwrap()) }
+
+// ===========================================================================
+// identifiers
+// ===========================================================================
+pub type_id -> Token
+    = s:$([A-Z][A-Za-z0-9_]*)
+    { Token::TypeId(s.into()) }
+
+pub object_id -> Token
+    = s:$([a-z][A-Za-z0-9_]*)
+    { Token::ObjectId(s.into()) }
+
+// ===========================================================================
+// sigils
+// ===========================================================================
+sigil -> Token
+    = c:$(
+        "<=" /
+        "<-" /
+        "=>" /
+        "."  /
+        "@"  /
+        "~"  /
+        "*"  /
+        "/"  /
+        "+"  /
+        "-"  /
+        "<"  /
+        "="  /
+        "("  /
+        ")"  /
+        ","  /
+        ";"  /
+        ":"  /
+        "{"  /
+        "}")
+    {
+      match c {
+          "<=" => Token::LessOrEqual,
+          "<-" => Token::Assign,
+          "=>" => Token::DoubleArrow,
+          "."  => Token::Dot,
+          "@"  => Token::At,
+          "~"  => Token::Neg,
+          "*"  => Token::Multiply,
+          "/"  => Token::Divide,
+          "+"  => Token::Plus,
+          "-"  => Token::Minus,
+          "<"  => Token::LessThan,
+          "="  => Token::Equal,
+          "("  => Token::LeftParen,
+          ")"  => Token::RightParen,
+          ","  => Token::Comma,
+          ";"  => Token::Semi,
+          ":"  => Token::Colon,
+          "{" => Token::LeftBrace,
+          "}" => Token::RightBrace,
+          _ => panic!("Unexpected match: \"{}\"", c),
+      }
+    }
+
+// ===========================================================================
+// error handling
+// ===========================================================================
+
+// When an invalid character (one that can’t begin any token) is encountered, a
+// string containing just that character should be returned as the error
+// string. Resume lexing at the following character.
+err_start -> Token
+    = c:$.
+    { Token::Err(c.into()) }
+
+// If you see “*)” outside a comment, report this error as ‘‘Unmatched *)’’,
+// rather than tokenizing it as * and ).
+err_end_comment -> Token
+    = "*)"
+    { Token::Err("Unmatched *)".into()) }
+
+// ===========================================================================
+// main
+// ===========================================================================
+whitespaces -> Option<Token>
+    = [ \t\r\n]+
+    { None }
+
+token -> Option<Token>
+    = t:(keyword   /
+         string    /
+         boolean   /
+         integer   /
+         type_id   /
+         object_id /
+         // must be before `sigil` otherwise we match * and ) separately as sigils
+         err_end_comment /
+         sigil     /
+         err_start)
+    { Some(t) }
+
+next_token -> (usize, Option<Token>)
+    = start:#position
+      t:(comment / whitespaces / token)
+      end:#position
+    {
+        let lines = __input[start..end].chars().filter(|&c| c == '\n').count();
+        (lines, t)
+    }
+
+
+pub tokenize -> Vec<(usize, Token)>
+    = start:#position vec:(next_token)* end:#position
+    {
+        let mut lineno = 1;
+        // count the lines!
+        vec
+            .into_iter()
+            .filter_map(|(lines, opt_token)| {
+                *&mut lineno += lines;
+                if let Some(token) = opt_token {
+                    Some((*&lineno, token))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
